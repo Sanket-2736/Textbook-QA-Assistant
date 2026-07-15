@@ -27,13 +27,17 @@ classifiers = [
 dependencies = [
     "fastapi==0.139.0",
     "uvicorn==0.51.0",
-    "langchain>=0.3.14,<0.4.0",
-    "langchain-core>=0.3.0,<1.0.0",
-    "langchain-community>=0.3.14,<0.4.0",
-    "langchain-pinecone==0.2.13",
-    "pinecone>=6.0.0,<8.0.0",
+    "langchain>=0.1.0",
+    "langchain-core>=1.0.0,<2.0.0",
+    "langchain-community>=0.1.0",
+    "langchain-cerebras>=0.8.2,<0.9.0",
+    "langchain-pinecone>=0.1.0",
+    "pinecone>=7.0.0,<8.0.0",
+    "langchain-openai>=0.1.0",
+    "langchain-huggingface>=0.0.1",
+    "sentence-transformers>=2.2.0",
     "python-dotenv==1.2.2",
-    "pydantic==2.13.4",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
