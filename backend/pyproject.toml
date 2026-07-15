@@ -34,8 +34,12 @@ dependencies = [
     "langchain-pinecone>=0.1.0",
     "langchain-openai>=0.1.0",
     "pinecone>=7.0.0,<8.0.0",
+    "pypdf>=4.0.0",
     "python-dotenv==1.2.2",
     "pydantic>=2.0.0",
+    "click>=8.1.0",
+    "aiofiles>=23.0.0",
+    "python-multipart>=0.0.6",
 ]
 
 [project.optional-dependencies]

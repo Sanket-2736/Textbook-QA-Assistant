@@ -27,7 +27,7 @@ def get_embeddings(provider: Optional[str] = None):
     Raises:
         ValueError: If OPENAI_API_KEY is not set for OpenAI provider
     """
-    embedding_provider = provider or os.getenv("EMBEDDING_PROVIDER", "openai").lower()
+    embedding_provider = provider or os.getenv("EMBEDDING_PROVIDER", "local").lower()
 
     if embedding_provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
