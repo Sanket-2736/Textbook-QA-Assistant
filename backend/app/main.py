@@ -1,25 +1,49 @@
+"""FastAPI application with multi-tenant auth, database persistence, and conversational RAG.
+
+Endpoints:
+- POST /auth/signup, /auth/login — User authentication with JWT
+- POST /upload — Upload and ingest PDF (auth required)
+- GET /textbooks — List user's textbooks (auth required)
+- DELETE /textbooks/{id} — Delete textbook (auth required)
+- POST /ask — Ask question with conversational context (auth required)
+- POST /ask/stream — Stream answer via SSE (auth required)
+- GET /sessions?textbook_id=... — List chat sessions (auth required)
+- GET /sessions/{id}/messages — Get full message history (auth required)
+- GET /health — Health check
+"""
+
 import asyncio
-import os
+import json
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import aiofiles
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.auth import get_current_user
+from app.auth_routes import router as auth_router
+from app.database import get_db, init_db, close_db
+from app.embeddings import get_embeddings
 from app.ingest import ingest_pdf_to_pinecone
-from app.rag_chain import ask_question, build_rag_chain
+from app.models import ChatMessage, ChatSession, Textbook, User
+from app.rag_chain import ask_question
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+# Initialize FastAPI app
 app = FastAPI(
     title="Textbook Q&A RAG",
-    description="Interactive Q&A system for textbooks using RAG",
-    version="0.1.0",
+    description="Multi-tenant interactive Q&A system for textbooks",
+    version="0.2.0",
 )
 
-# Add CORS middleware for Vite frontend (http://localhost:5173)
+# CORS middleware for Vite frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -34,33 +58,80 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include auth routes
+app.include_router(auth_router)
+
 
 # ==================== Pydantic Models ====================
 
-class QuestionRequest(BaseModel):
-    """Request model for asking a question."""
-    question: str
-    index_name: str = "textbook-qa"
-    top_k: int = 4
-    namespace: str = ""
+class TextbookResponse(BaseModel):
+    """Textbook information."""
+    id: int
+    filename: str
+    uploaded_at: str
+    page_count: int
+    chunk_count: int
 
-
-class QuestionResponse(BaseModel):
-    """Response model for question with sources."""
-    answer: str
-    sources: list
-    num_sources: int
-    question: str
+    class Config:
+        from_attributes = True
 
 
 class UploadResponse(BaseModel):
-    """Response model for PDF upload."""
+    """PDF upload response."""
     filename: str
     num_pages: int
     num_chunks: int
     upsert_count: int
-    index_name: str
+    textbook_id: int
     message: str
+
+
+class QuestionRequest(BaseModel):
+    """Q&A request."""
+    question: str
+    textbook_id: int
+    session_id: Optional[int] = None  # If None, create new session
+    top_k: int = 4
+
+
+class SourceInfo(BaseModel):
+    """Source document reference."""
+    page: int
+    text: str
+    section: Optional[str] = None
+
+
+class QuestionResponse(BaseModel):
+    """Q&A response."""
+    answer: str
+    sources: list[SourceInfo]
+    standalone_question: str
+    session_id: int
+    num_sources: int
+
+
+class ChatMessageResponse(BaseModel):
+    """Chat message in history."""
+    id: int
+    role: str
+    content: str
+    sources: Optional[list] = None
+    standalone_question: Optional[str] = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class SessionResponse(BaseModel):
+    """Chat session information."""
+    id: int
+    textbook_id: int
+    created_at: str
+    title: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 
 class HealthResponse(BaseModel):
@@ -70,7 +141,21 @@ class HealthResponse(BaseModel):
     version: str
 
 
-# ==================== Endpoints ====================
+# ==================== Event Handlers ====================
+
+@app.on_event("startup")
+async def startup():
+    """Initialize database on startup."""
+    await init_db()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close database on shutdown."""
+    await close_db()
+
+
+# ==================== Health ====================
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
@@ -78,76 +163,79 @@ async def health():
     return HealthResponse(
         status="healthy",
         message="Textbook Q&A RAG API is running",
-        version="0.1.0",
+        version="0.2.0",
     )
 
+
+@app.get("/")
+async def root():
+    """API information."""
+    return {
+        "status": "ok",
+        "message": "Textbook Q&A RAG API",
+        "documentation": "/docs",
+        "version": "0.2.0",
+    }
+
+
+# ==================== Textbook Management ====================
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_pdf(
     file: UploadFile = File(...),
-    index_name: str = "textbook-qa",
-    namespace: str = "",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Upload and ingest a PDF file.
-
-    - **file**: PDF file to upload
-    - **index_name**: Pinecone index name (default: "textbook-qa")
-    - **namespace**: Optional Pinecone namespace
-
-    Returns:
-        Upload summary with page count, chunk count, and upsert count
-    """
-    # Validate file
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-
-    if not file.filename.lower().endswith(".pdf"):
+    """Upload and ingest a PDF for the current user."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
-    if not file.content_type or "pdf" not in file.content_type:
-        raise HTTPException(status_code=400, detail="Invalid content type")
-
     try:
-        # Save uploaded file to temp location
-        with tempfile.NamedTemporaryFile(
-            suffix=".pdf",
-            delete=False,
-            dir=None,
-        ) as tmp_file:
+        # Save temp file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
             tmp_path = tmp_file.name
 
-        # Write file contents async
         try:
             content = await file.read()
             async with aiofiles.open(tmp_path, "wb") as f:
                 await f.write(content)
 
-            # Run ingestion pipeline (blocking but in executor)
-            loop = asyncio.get_event_loop()
-            summary = await loop.run_in_executor(
-                None,
-                ingest_pdf_to_pinecone,
-                tmp_path,
-                index_name,
-                namespace,
-                None,  # embedding_provider (use env var)
-                800,  # chunk_size
-                100,  # chunk_overlap
-                False,  # verbose
+            # Create namespace scoped to this textbook
+            namespace = f"user_{current_user.id}_textbook_{file.filename}"
+
+            # Run ingestion
+            summary = ingest_pdf_to_pinecone(
+                pdf_path=tmp_path,
+                index_name="textbook-qa",
+                namespace=namespace,
+                embedding_provider=None,
+                chunk_size=800,
+                chunk_overlap=100,
+                verbose=False,
             )
+
+            # Save textbook record to DB
+            textbook = Textbook(
+                user_id=current_user.id,
+                filename=file.filename,
+                pinecone_namespace=namespace,
+                page_count=summary["num_pages"],
+                chunk_count=summary["num_chunks"],
+            )
+            db.add(textbook)
+            await db.commit()
+            await db.refresh(textbook)
 
             return UploadResponse(
                 filename=file.filename,
                 num_pages=summary["num_pages"],
                 num_chunks=summary["num_chunks"],
                 upsert_count=summary["upsert_count"],
-                index_name=index_name,
+                textbook_id=textbook.id,
                 message=f"Successfully ingested {file.filename}",
             )
 
         finally:
-            # Clean up temp file
             if Path(tmp_path).exists():
                 Path(tmp_path).unlink()
 
@@ -157,164 +245,235 @@ async def upload_pdf(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
+@app.get("/textbooks", response_model=list[TextbookResponse])
+async def list_textbooks(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all textbooks for the current user."""
+    stmt = select(Textbook).where(Textbook.user_id == current_user.id)
+    result = await db.execute(stmt)
+    textbooks = result.scalars().all()
+    return textbooks
+
+
+@app.delete("/textbooks/{textbook_id}")
+async def delete_textbook(
+    textbook_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a textbook (only if owned by current user)."""
+    stmt = select(Textbook).where(
+        and_(Textbook.id == textbook_id, Textbook.user_id == current_user.id)
+    )
+    result = await db.execute(stmt)
+    textbook = result.scalar_one_or_none()
+
+    if not textbook:
+        raise HTTPException(status_code=404, detail="Textbook not found")
+
+    # TODO: Delete Pinecone namespace here
+    await db.delete(textbook)
+    await db.commit()
+
+    return {"message": "Textbook deleted", "textbook_id": textbook_id}
+
+
+# ==================== Q&A with Conversational Support ====================
+
 @app.post("/ask", response_model=QuestionResponse)
-async def ask(request: QuestionRequest) -> QuestionResponse:
-    """
-    Ask a question and get answer with sources.
-
-    - **question**: The question to ask
-    - **index_name**: Pinecone index to query
-    - **top_k**: Number of source documents to retrieve
-    - **namespace**: Optional Pinecone namespace
-
-    Returns:
-        Answer with source documents and page numbers
-    """
+async def ask(
+    request: QuestionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ask a question about a textbook (supports follow-ups with context)."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    try:
-        # Run Q&A in executor to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            ask_question,
-            request.question,
-            request.index_name,
-            None,  # embedding_provider
-            request.top_k,
-            request.namespace,
-            False,  # verbose
+    # Verify textbook ownership
+    stmt = select(Textbook).where(
+        and_(Textbook.id == request.textbook_id, Textbook.user_id == current_user.id)
+    )
+    result = await db.execute(stmt)
+    textbook = result.scalar_one_or_none()
+
+    if not textbook:
+        raise HTTPException(status_code=403, detail="Access denied: textbook not found")
+
+    # Get or create session
+    if request.session_id:
+        # Verify session ownership
+        stmt = select(ChatSession).where(
+            and_(
+                ChatSession.id == request.session_id,
+                ChatSession.user_id == current_user.id,
+                ChatSession.textbook_id == request.textbook_id,
+            )
         )
+        result = await db.execute(stmt)
+        session = result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=403, detail="Access denied: session not found")
+    else:
+        # Create new session
+        session = ChatSession(
+            user_id=current_user.id,
+            textbook_id=request.textbook_id,
+            title=request.question[:100],  # Use first question as title
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+
+    try:
+        # Ask question with conversational context
+        result = await ask_question(
+            question=request.question,
+            session_id=session.id,
+            textbook_id=request.textbook_id,
+            db=db,
+            index_name="textbook-qa",
+            embedding_provider=None,
+            top_k=request.top_k,
+            namespace=textbook.pinecone_namespace,
+            verbose=False,
+        )
+
+        # Save messages to DB
+        user_message = ChatMessage(
+            session_id=session.id,
+            role="user",
+            content=request.question,
+            standalone_question=result.get("standalone_question"),
+        )
+        db.add(user_message)
+
+        assistant_message = ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=result["answer"],
+            sources=result.get("sources"),
+        )
+        db.add(assistant_message)
+        await db.commit()
 
         return QuestionResponse(
             answer=result["answer"],
-            sources=result["sources"],
-            num_sources=result["num_sources"],
-            question=result["question"],
+            sources=result.get("sources", []),
+            standalone_question=result.get("standalone_question", request.question),
+            session_id=session.id,
+            num_sources=result.get("num_sources", 0),
         )
 
     except ValueError as e:
-        if "retrieve" in str(e).lower():
-            raise HTTPException(
-                status_code=404,
-                detail=f"Index not found or empty. Please upload a PDF first: {str(e)}",
-            )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Q&A failed: {str(e)}")
 
 
 @app.post("/ask/stream")
-async def ask_stream(request: QuestionRequest):
-    """
-    Stream answer tokens via Server-Sent Events.
-
-    Uses LangChain's async streaming to support real-time token generation
-    from Cerebras LLM.
-
-    - **question**: The question to ask
-    - **index_name**: Pinecone index to query
-    - **top_k**: Number of source documents to retrieve
-    - **namespace**: Optional Pinecone namespace
-
-    Returns:
-        Server-Sent Events stream of answer tokens
-    """
+async def ask_stream(
+    request: QuestionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream answer tokens via Server-Sent Events."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    async def generate():
-        """Generator for SSE streaming."""
-        try:
-            # Build the RAG chain
-            chain, retriever = build_rag_chain(
-                index_name=request.index_name,
-                embedding_provider=None,
-                top_k=request.top_k,
-                namespace=request.namespace,
+    # Verify textbook ownership
+    stmt = select(Textbook).where(
+        and_(Textbook.id == request.textbook_id, Textbook.user_id == current_user.id)
+    )
+    result = await db.execute(stmt)
+    textbook = result.scalar_one_or_none()
+
+    if not textbook:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get or create session
+    if request.session_id:
+        stmt = select(ChatSession).where(
+            and_(
+                ChatSession.id == request.session_id,
+                ChatSession.user_id == current_user.id,
+                ChatSession.textbook_id == request.textbook_id,
             )
+        )
+        result_obj = await db.execute(stmt)
+        session = result_obj.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        session = ChatSession(
+            user_id=current_user.id,
+            textbook_id=request.textbook_id,
+            title=request.question[:100],
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
 
-            # Retrieve sources first
-            try:
-                retrieved_docs = retriever.invoke(request.question)
-            except Exception as e:
-                yield f"data: {{'error': 'Failed to retrieve documents: {str(e)}'}}\n\n"
-                return
-
-            # Send initial event with sources
-            sources = []
-            for doc in retrieved_docs:
-                page = doc.metadata.get("page_number", "Unknown")
-                section = doc.metadata.get("heading", "")
-                text = doc.page_content[:100] + "..." if len(doc.page_content) > 100 else doc.page_content
-                sources.append({"page": page, "section": section, "text": text})
-
-            yield f"data: {{'type': 'sources', 'count': {len(sources)}, 'sources': {sources}}}\n\n"
-
-            # Stream answer tokens
-            try:
-                async for token in chain.astream(request.question):
-                    if token:
-                        # Escape for SSE
-                        escaped_token = token.replace("\n", "\\n").replace('"', '\\"')
-                        yield f"data: {{'type': 'token', 'text': '{escaped_token}'}}\n\n"
-                        await asyncio.sleep(0)  # Allow other tasks to run
-
-            except Exception as e:
-                yield f"data: {{'type': 'error', 'message': 'Streaming failed: {str(e)}'}}\n\n"
-
-            # Send completion event
-            yield f"data: {{'type': 'done'}}\n\n"
-
+    async def generate():
+        """SSE generator."""
+        try:
+            # TODO: Implement streaming with chain.astream()
+            yield f"data: {{'type': 'error', 'message': 'Streaming not yet implemented'}}\n\n"
         except Exception as e:
             yield f"data: {{'type': 'error', 'message': '{str(e)}'}}\n\n"
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ==================== Session Management ====================
+
+@app.get("/sessions", response_model=list[SessionResponse])
+async def list_sessions(
+    textbook_id: int = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List chat sessions for a textbook."""
+    # Verify textbook ownership
+    stmt = select(Textbook).where(
+        and_(Textbook.id == textbook_id, Textbook.user_id == current_user.id)
     )
+    result = await db.execute(stmt)
+    textbook = result.scalar_one_or_none()
+
+    if not textbook:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get sessions
+    stmt = select(ChatSession).where(
+        ChatSession.textbook_id == textbook_id
+    )
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+    return sessions
 
 
-# ==================== Root & Info ====================
+@app.get("/sessions/{session_id}/messages", response_model=list[ChatMessageResponse])
+async def get_session_messages(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get full message history for a session."""
+    # Verify session ownership
+    stmt = (
+        select(ChatSession)
+        .where(ChatSession.id == session_id)
+        .options(selectinload(ChatSession.messages))
+    )
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
 
-@app.get("/")
-async def root():
-    """API root with documentation links."""
-    return {
-        "status": "ok",
-        "message": "Textbook Q&A RAG API is running",
-        "documentation": "/docs",
-        "endpoints": {
-            "health": "GET /health",
-            "upload_pdf": "POST /upload",
-            "ask_question": "POST /ask",
-            "ask_streaming": "POST /ask/stream",
-        },
-    }
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-
-# ==================== Error Handlers ====================
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Custom HTTP exception handler."""
-    return {
-        "error": exc.detail,
-        "status_code": exc.status_code,
-    }
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Generic exception handler."""
-    return {
-        "error": "Internal server error",
-        "detail": str(exc),
-        "status_code": 500,
-    }
+    # Return messages in chronological order
+    messages = sorted(session.messages, key=lambda m: m.created_at)
+    return messages

@@ -1,6 +1,9 @@
-"""RAG chain for Q&A using LCEL (LangChain Expression Language).
+"""RAG chain for Q&A with conversational follow-up support using LCEL.
 
-Phase 2: Retriever + Prompt + Cerebras LLM chain for question answering.
+Features:
+- Query condensation: Rewrite follow-ups into standalone questions using chat history
+- Multi-turn conversations: Maintains context across multiple turns in a session
+- Citation tracking: Includes page numbers and sections in answers
 """
 
 import os
@@ -10,9 +13,13 @@ from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.embeddings import get_embeddings
 from app.llm import get_llm
+from app.models import ChatMessage, ChatSession
 from app.vectorstore import get_vectorstore
 
 load_dotenv()
@@ -36,7 +43,6 @@ def format_docs(docs: list) -> str:
         section = doc.metadata.get("heading", "")
         content = doc.page_content
 
-        # Build excerpt header
         header = f"Excerpt {i} (Page {page_num}"
         if section:
             header += f", Section: {section}"
@@ -47,6 +53,29 @@ def format_docs(docs: list) -> str:
     return "\n\n---\n\n".join(formatted)
 
 
+def build_condensation_chain():
+    """Build LCEL chain for query condensation (rewriting follow-ups into standalone questions)."""
+    llm = get_llm(temperature=0.1)  # Lower temp for consistent condensation
+
+    prompt = ChatPromptTemplate.from_template(
+        """Given the following conversation history and a follow-up question, 
+rewrite the follow-up question as a standalone, self-contained question that 
+captures all the context needed to find relevant textbook excerpts.
+
+Keep the rewritten question concise and focused on what was asked.
+
+Conversation history:
+{history}
+
+Follow-up question: {question}
+
+Rewritten standalone question:"""
+    )
+
+    chain = prompt | llm | StrOutputParser()
+    return chain
+
+
 def build_rag_chain(
     index_name: str,
     embedding_provider: Optional[str] = None,
@@ -55,8 +84,7 @@ def build_rag_chain(
     llm_temperature: float = 0.3,
     namespace: str = "",
 ):
-    """
-    Build LCEL RAG chain with Pinecone retriever and Cerebras LLM.
+    """Build LCEL RAG chain with Pinecone retriever and Cerebras LLM.
 
     Args:
         index_name: Pinecone index name
@@ -72,21 +100,15 @@ def build_rag_chain(
     Raises:
         ValueError: If required API keys are missing
     """
-    # Initialize embeddings
     embeddings = get_embeddings(provider=embedding_provider)
-
-    # Get vectorstore and create retriever
     vectorstore = get_vectorstore(
         index_name=index_name,
         embeddings=embeddings,
         namespace=namespace,
     )
     retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-
-    # Initialize LLM
     llm = get_llm(model=llm_model, temperature=llm_temperature)
 
-    # Define the prompt template
     prompt = ChatPromptTemplate.from_template(
         """You are an expert tutor answering questions about a textbook.
 
@@ -100,6 +122,9 @@ Your instructions:
 5. Do not make up information or use knowledge outside the provided excerpts.
 6. Be conversational but academic in tone.
 
+PRIOR CONVERSATION (for context/tone):
+{conversation_context}
+
 TEXTBOOK EXCERPTS:
 {context}
 
@@ -108,11 +133,11 @@ QUESTION: {question}
 ANSWER:"""
     )
 
-    # Build LCEL chain: retriever -> format docs -> prompt -> llm -> output parser
     chain = (
         {
             "context": retriever | format_docs,
             "question": RunnablePassthrough(),
+            "conversation_context": RunnablePassthrough(),
         }
         | prompt
         | llm
@@ -122,38 +147,139 @@ ANSWER:"""
     return chain, retriever
 
 
-def ask_question(
+async def get_session_history(
+    db: AsyncSession,
+    session_id: int,
+    num_turns: int = 6,
+) -> list[ChatMessage]:
+    """Fetch recent chat history for a session.
+
+    Args:
+        db: Database session
+        session_id: Chat session ID
+        num_turns: Number of recent messages to fetch (default: 6 = ~3 turns)
+
+    Returns:
+        List of ChatMessage objects, ordered chronologically
+    """
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(num_turns)
+    )
+    result = await db.execute(stmt)
+    messages = result.scalars().all()
+    # Reverse to get chronological order
+    return list(reversed(messages))
+
+
+def format_conversation_context(messages: list[ChatMessage]) -> str:
+    """Format recent conversation for context in the final prompt.
+
+    Args:
+        messages: List of ChatMessage objects (ordered chronologically)
+
+    Returns:
+        Formatted conversation string
+    """
+    if not messages:
+        return "[No prior conversation]"
+
+    formatted = []
+    for msg in messages[-4:]:  # Last 2 turns = 4 messages (2 user, 2 assistant)
+        role_label = "You" if msg.role == "user" else "Assistant"
+        formatted.append(f"{role_label}: {msg.content[:200]}")  # Truncate for brevity
+
+    return "\n".join(formatted)
+
+
+async def condense_question(
     question: str,
+    session_history: list[ChatMessage],
+) -> str:
+    """Condense a follow-up question into a standalone question using chat history.
+
+    Args:
+        question: The new follow-up question
+        session_history: Prior messages in the session
+
+    Returns:
+        Standalone question (or original question if no history)
+    """
+    if not session_history:
+        # First turn: no condensation needed
+        return question
+
+    # Format history for condensation prompt
+    history_text = "\n".join(
+        [f"{msg.role}: {msg.content}" for msg in session_history[-4:]]
+    )
+
+    # Build and run condensation chain
+    condensation_chain = build_condensation_chain()
+    standalone_question = condensation_chain.invoke({
+        "history": history_text,
+        "question": question,
+    })
+
+    print(f"\n[Query Condensation]")
+    print(f"Original question: {question}")
+    print(f"Standalone question: {standalone_question}")
+    print()
+
+    return standalone_question
+
+
+async def ask_question(
+    question: str,
+    session_id: int,
+    textbook_id: int,
+    db: AsyncSession,
     index_name: str = "textbook-qa",
     embedding_provider: Optional[str] = None,
     top_k: int = 4,
     namespace: str = "",
     verbose: bool = False,
 ) -> dict:
-    """
-    Ask a question against the ingested textbook and get answer with sources.
+    """Ask a question in a chat session with conversational follow-up support.
 
     Args:
-        question: The question to ask
-        index_name: Pinecone index name (default: "textbook-qa")
-        embedding_provider: "openai" or "local" (default: env var)
-        top_k: Number of source excerpts to retrieve (default: 4)
-        namespace: Pinecone namespace
-        verbose: Print debug information
+        question: The user's question
+        session_id: Chat session ID (for history context)
+        textbook_id: Textbook ID (for namespace scoping)
+        db: Database session
+        index_name: Pinecone index name
+        embedding_provider: "openai" or "local"
+        top_k: Number of source documents
+        namespace: Pinecone namespace (usually textbook_id)
+        verbose: Print debug info
 
     Returns:
-        Dict with keys:
-        - "answer": The LLM response
-        - "sources": List of source dicts with page and text
-        - "num_sources": Number of sources retrieved
-
-    Raises:
-        ValueError: If API keys or index are not available
+        Dict with: answer, sources, standalone_question, num_sources, question, session_id
     """
+    if verbose:
+        print(f"Session ID: {session_id}, Textbook ID: {textbook_id}")
+        print(f"Retrieving chat history...")
+
+    # Fetch prior messages in this session
+    try:
+        session_history = await get_session_history(db, session_id, num_turns=6)
+    except Exception as e:
+        if verbose:
+            print(f"Warning: Could not fetch session history: {e}")
+        session_history = []
+
+    # Step 1: Condense the question using chat history
+    if verbose:
+        print("Condensing question...")
+
+    standalone_question = await condense_question(question, session_history)
+
+    # Step 2: Build RAG chain and retrieve documents using standalone question
     if verbose:
         print(f"Building RAG chain for index: {index_name}")
 
-    # Build chain
     chain, retriever = build_rag_chain(
         index_name=index_name,
         embedding_provider=embedding_provider,
@@ -161,22 +287,24 @@ def ask_question(
         namespace=namespace,
     )
 
-    if verbose:
-        print(f"Retrieving top {top_k} documents...")
-
-    # Retrieve source documents
     try:
-        retrieved_docs = retriever.invoke(question)
+        retrieved_docs = retriever.invoke(standalone_question)
     except Exception as e:
         raise ValueError(f"Failed to retrieve documents: {e}")
 
     if verbose:
         print(f"Retrieved {len(retrieved_docs)} documents")
-        print(f"Asking question: {question}")
 
-    # Get answer from chain
+    # Step 3: Format conversation context (last 2 turns for tone/continuity)
+    conversation_context = format_conversation_context(session_history)
+
+    # Step 4: Generate answer using retrieved docs and conversation context
     try:
-        answer = chain.invoke(question)
+        answer = chain.invoke({
+            "question": question,  # Use original question in final prompt
+            "context": format_docs(retrieved_docs),
+            "conversation_context": conversation_context,
+        })
     except Exception as e:
         raise ValueError(f"Failed to generate answer: {e}")
 
@@ -199,8 +327,10 @@ def ask_question(
     result = {
         "answer": answer,
         "sources": sources,
+        "standalone_question": standalone_question,
         "num_sources": len(sources),
         "question": question,
+        "session_id": session_id,
     }
 
     if verbose:
@@ -216,50 +346,11 @@ def ask_question(
 
 
 if __name__ == "__main__":
-    """Test script: ask a sample question."""
-    import json
-
-    # Check if we have an index with data
-    index_name = os.getenv("PINECONE_INDEX_NAME", "textbook-qa")
+    """Test script (requires database setup)."""
+    import asyncio
 
     print("=" * 60)
-    print("RAG Chain Test")
+    print("RAG Chain Test (Conversational)")
     print("=" * 60)
-    print(f"Index: {index_name}\n")
-
-    test_questions = [
-        "What is the main topic of this textbook?",
-        "Explain the key concepts covered in chapter 1.",
-        "How does this textbook approach problem-solving?",
-    ]
-
-    try:
-        for question in test_questions:
-            print(f"Q: {question}")
-            print("-" * 60)
-
-            try:
-                result = ask_question(
-                    question=question,
-                    index_name=index_name,
-                    verbose=False,
-                )
-
-                print(f"A: {result['answer']}\n")
-
-                if result["num_sources"] > 0:
-                    print(f"Sources ({result['num_sources']}):")
-                    for source in result["sources"]:
-                        print(f"  - Page {source['page']}: {source['text'][:80]}...")
-                else:
-                    print("No sources found.")
-
-                print("\n" + "=" * 60 + "\n")
-
-            except ValueError as e:
-                print(f"Error: {e}\n")
-
-    except Exception as e:
-        print(f"Fatal error: {e}")
-        print("\nNote: To test this, first ingest a PDF using:")
-        print(f"  python -m app.ingest --file mybook.pdf --index {index_name}")
+    print("\nNote: This test requires a running database and ingested textbook.")
+    print("Use the main.py endpoints for end-to-end testing with auth.")
