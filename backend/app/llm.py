@@ -16,7 +16,7 @@ def get_llm():
 
 def invoke_llm(
     prompt: str,
-    model: str = "gemma-4-31b",
+    model: str = "gpt-oss-120b",
     temperature: float = 0.7,
 ):
     client = get_llm()

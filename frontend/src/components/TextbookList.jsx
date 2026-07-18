@@ -20,25 +20,26 @@ export default function TextbookList({
 
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       setError('Please select a PDF file')
+      setTimeout(() => setError(''), 4000)
       return
     }
 
     setUploading(true)
     setError('')
-    setUploadProgress('Uploading...')
+    setUploadProgress('Uploading file...')
 
     try {
       const formData = new FormData()
       formData.append('file', file)
 
-      setUploadProgress('Ingesting into Pinecone...')
-      const result = await api.postForm('/api/upload', formData)
+      setUploadProgress('Extracting text and embedding...')
+      const result = await api.postForm('/upload', formData)
 
-      setUploadProgress('Ready!')
+      setUploadProgress('✅ Upload complete!')
       setTimeout(() => setUploadProgress(''), 2000)
       onTextbookUploaded(result)
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'Upload failed')
       setUploadProgress('')
     } finally {
       setUploading(false)
@@ -48,14 +49,15 @@ export default function TextbookList({
     }
   }
 
-  const handleDelete = async (textbookId) => {
+  const handleDelete = async (textbookId, event) => {
+    event.stopPropagation()
     if (!confirm('Delete this textbook and all associated chats? This cannot be undone.')) return
 
     try {
-      await api.delete(`/api/textbooks/${textbookId}`)
+      await api.delete(`/textbooks/${textbookId}`)
       onTextbookDeleted(textbookId)
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'Failed to delete textbook')
     }
   }
 
@@ -64,7 +66,6 @@ export default function TextbookList({
       return new Date(dateStr).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
-        year: 'numeric',
       })
     } catch {
       return 'Unknown'
@@ -74,23 +75,34 @@ export default function TextbookList({
   return (
     <div className="w-72 bg-white border-r border-gray-200 flex flex-col overflow-hidden shadow-sm">
       {/* Upload Section */}
-      <div className="p-4 border-b border-gray-200">
-        <h2 className="text-sm font-semibold text-gray-900 mb-3">My Textbooks</h2>
+      <div className="p-4 border-b border-gray-200 bg-gradient-to-b from-gray-50 to-white">
+        <h2 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+          📚 My Textbooks
+        </h2>
         {error && (
-          <div className="mb-3 p-2 bg-red-100 border border-red-300 rounded text-xs text-red-700">
-            {error}
+          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium">
+            ⚠️ {error}
           </div>
         )}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="w-full btn-primary text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full px-4 py-2.5 bg-blue-600 text-white font-medium text-sm rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition duration-200 flex items-center justify-center gap-2"
         >
-          <span>+</span>
-          {uploading ? 'Uploading...' : 'Upload PDF'}
+          {uploading ? (
+            <>
+              <span className="inline-block animate-spin">⟳</span>
+              <span>Uploading...</span>
+            </>
+          ) : (
+            <>
+              <span>📤</span>
+              <span>Upload PDF</span>
+            </>
+          )}
         </button>
         {uploadProgress && (
-          <p className="text-xs text-primary-600 mt-2 text-center">{uploadProgress}</p>
+          <p className="text-xs text-blue-600 mt-2.5 text-center font-medium">{uploadProgress}</p>
         )}
         <input
           ref={fileInputRef}
@@ -105,33 +117,41 @@ export default function TextbookList({
       {/* Textbooks List */}
       <div className="flex-1 overflow-y-auto">
         {textbooks.length === 0 ? (
-          <div className="p-4 text-center">
-            <p className="text-sm text-gray-500">No textbooks yet</p>
-            <p className="text-xs text-gray-400 mt-1">Upload a PDF to get started</p>
+          <div className="p-6 text-center h-full flex items-center justify-center">
+            <div>
+              <p className="text-2xl mb-2">📑</p>
+              <p className="text-sm font-medium text-gray-700">No textbooks yet</p>
+              <p className="text-xs text-gray-500 mt-1">Upload a PDF to get started</p>
+            </div>
           </div>
         ) : (
-          <ul className="p-2 space-y-2">
+          <ul className="p-2 space-y-1">
             {textbooks.map((textbook) => (
               <li key={textbook.id} className="group">
                 <button
                   onClick={() => onSelectTextbook(textbook)}
-                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors text-sm ${
+                  className={`w-full text-left px-3 py-3 rounded-lg transition-all text-sm ${
                     activeTextbook?.id === textbook.id
-                      ? 'bg-primary-100 text-primary-900'
-                      : 'text-gray-700 hover:bg-gray-100'
+                      ? 'bg-blue-100 text-blue-900 shadow-sm border border-blue-200'
+                      : 'text-gray-700 hover:bg-gray-100 border border-transparent'
                   }`}
                 >
-                  <div className="truncate font-medium">{textbook.filename}</div>
-                  <div className="text-xs text-gray-500 mt-0.5">
-                    {textbook.page_count} pages • {formatDate(textbook.uploaded_at)}
+                  <div className="flex items-start gap-2">
+                    <span className="text-lg flex-shrink-0 mt-0.5">📖</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{textbook.filename}</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {textbook.page_count} pages {textbook.uploaded_at && `• ${formatDate(textbook.uploaded_at)}`}
+                      </div>
+                    </div>
                   </div>
                 </button>
                 {activeTextbook?.id === textbook.id && (
                   <button
-                    onClick={() => handleDelete(textbook.id)}
-                    className="ml-3 mt-1 text-xs text-red-600 hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => handleDelete(textbook.id, e)}
+                    className="ml-8 mt-1 px-2 py-1 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
                   >
-                    Delete
+                    🗑️ Delete
                   </button>
                 )}
               </li>
@@ -140,10 +160,12 @@ export default function TextbookList({
         )}
       </div>
 
-      {/* Footer Info */}
-      <div className="p-4 border-t border-gray-200 bg-gray-50 text-xs text-gray-500">
-        <p>📚 {textbooks.length} textbook{textbooks.length !== 1 ? 's' : ''}</p>
-      </div>
+      {/* Footer Stats */}
+      {textbooks.length > 0 && (
+        <div className="p-4 border-t border-gray-200 bg-gray-50 text-xs text-gray-600 font-medium">
+          <p>� {textbooks.length} textbook{textbooks.length !== 1 ? 's' : ''}</p>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
+import { API_BASE_URL, formatApiError } from '../lib/config'
 
 const AuthContext = createContext()
 
@@ -13,13 +14,18 @@ export function AuthProvider({ children }) {
     const storedUser = localStorage.getItem('auth_user')
     if (storedToken && storedUser) {
       setToken(storedToken)
-      setUser(JSON.parse(storedUser))
+      try {
+        setUser(JSON.parse(storedUser))
+      } catch (e) {
+        console.error('Failed to parse stored user', e)
+        logout()
+      }
     }
     setLoading(false)
   }, [])
 
   const login = async (email, password) => {
-    const response = await fetch('/api/auth/login', {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -27,7 +33,7 @@ export function AuthProvider({ children }) {
 
     if (!response.ok) {
       const error = await response.json()
-      throw new Error(error.detail || 'Login failed')
+      throw new Error(formatApiError(error.detail, response.status) || 'Login failed')
     }
 
     const data = await response.json()
@@ -37,8 +43,7 @@ export function AuthProvider({ children }) {
     setToken(newToken)
     setUser(newUser)
 
-    // Note: localStorage is used here for simplicity in dev.
-    // For production, use httpOnly cookies instead (more secure against XSS).
+    // Store auth data (use httpOnly cookies in production)
     localStorage.setItem('auth_token', newToken)
     localStorage.setItem('auth_user', JSON.stringify(newUser))
 
@@ -46,7 +51,7 @@ export function AuthProvider({ children }) {
   }
 
   const signup = async (email, password) => {
-    const response = await fetch('/api/auth/signup', {
+    const response = await fetch(`${API_BASE_URL}/auth/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -54,7 +59,7 @@ export function AuthProvider({ children }) {
 
     if (!response.ok) {
       const error = await response.json()
-      throw new Error(error.detail || 'Signup failed')
+      throw new Error(formatApiError(error.detail, response.status) || 'Signup failed')
     }
 
     const data = await response.json()
@@ -64,8 +69,7 @@ export function AuthProvider({ children }) {
     setToken(newToken)
     setUser(newUser)
 
-    // Note: localStorage is used here for simplicity in dev.
-    // For production, use httpOnly cookies instead (more secure against XSS).
+    // Store auth data
     localStorage.setItem('auth_token', newToken)
     localStorage.setItem('auth_user', JSON.stringify(newUser))
 

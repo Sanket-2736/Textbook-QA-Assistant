@@ -2,53 +2,75 @@ import React, { useState } from 'react'
 
 export default function ChatMessage({ message }) {
   const [showSources, setShowSources] = useState(false)
-  const [showStandaloneQuestion, setShowStandaloneQuestion] = useState(false)
+  const [showQuery, setShowQuery] = useState(false)
 
   const isUser = message.role === 'user'
   const isError = message.error
-  const isStreaming = message.isStreaming
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {/* Avatar */}
+      {!isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">
+          AI
+        </div>
+      )}
+
+      {/* Message Content */}
       <div
-        className={`max-w-2xl rounded-lg px-4 py-3 ${
+        className={`max-w-2xl ${
           isUser
-            ? 'bg-primary-600 text-white'
+            ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2'
             : isError
-            ? 'bg-red-100 text-red-900 border border-red-300'
-            : 'bg-gray-100 text-gray-900'
-        } ${isStreaming ? 'opacity-90' : ''}`}
+            ? 'bg-red-50 border-l-4 border-red-500 rounded-lg px-4 py-3 text-red-700'
+            : 'bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 text-gray-900'
+        }`}
       >
+        {/* Main message text */}
         <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
           {message.content}
-          {isStreaming && <span className="animate-pulse">▌</span>}
         </p>
 
-        {/* Sources */}
-        {!isUser && message.sources && message.sources.length > 0 && (
+        {/* Sources Section */}
+        {!isUser && !isError && message.sources && message.sources.length > 0 && (
           <div className="mt-3 pt-3 border-t border-gray-300">
             <button
               onClick={() => setShowSources(!showSources)}
-              className="text-xs font-medium text-primary-700 hover:text-primary-800 flex items-center gap-1"
+              className="text-xs font-semibold text-blue-700 hover:text-blue-800 flex items-center gap-1.5 transition"
             >
-              {showSources ? '▼' : '▶'} {message.sources.length} source
-              {message.sources.length !== 1 ? 's' : ''}
+              <span className={`transform transition ${showSources ? 'rotate-90' : ''}`}>
+                ▶
+              </span>
+              📎 {message.sources.length} {message.sources.length === 1 ? 'source' : 'sources'}
             </button>
 
             {showSources && (
-              <div className="mt-2 space-y-2">
+              <div className="mt-3 space-y-2">
                 {message.sources.map((source, idx) => (
                   <div
                     key={idx}
-                    className="text-xs bg-white bg-opacity-50 rounded p-2 border border-gray-300"
+                    className="bg-white bg-opacity-60 rounded-lg p-3 border border-gray-200 hover:border-blue-300 hover:shadow-sm transition"
                   >
-                    <div className="font-semibold text-gray-700">
-                      {source.section ? `${source.section} ` : ''}
-                      (Page {source.page})
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold text-gray-700">
+                          {source.section ? (
+                            <>
+                              📖 <span className="text-blue-600">{source.section}</span>
+                            </>
+                          ) : (
+                            '📄'
+                          )}
+                          {' '}Page {source.page}
+                        </div>
+                        <p className="text-xs text-gray-600 mt-1.5 line-clamp-3 leading-relaxed">
+                          {source.text}
+                        </p>
+                      </div>
+                      <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded font-medium flex-shrink-0">
+                        p.{source.page}
+                      </span>
                     </div>
-                    <p className="text-gray-600 mt-1 line-clamp-2">
-                      {source.text}
-                    </p>
                   </div>
                 ))}
               </div>
@@ -56,23 +78,34 @@ export default function ChatMessage({ message }) {
           </div>
         )}
 
-        {/* Debug: Standalone Question */}
+        {/* Query Condensation Debug Info */}
         {!isUser && message.standalone_question && (
-          <div className="mt-2 pt-2 border-t border-gray-300">
+          <div className="mt-2 pt-2 border-t border-gray-200">
             <button
-              onClick={() => setShowStandaloneQuestion(!showStandaloneQuestion)}
-              className="text-xs text-gray-500 hover:text-gray-700 italic"
+              onClick={() => setShowQuery(!showQuery)}
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1 transition"
             >
-              {showStandaloneQuestion ? '▼ Hide query' : '▶ Show query'}
+              <span className={`transform transition ${showQuery ? 'rotate-90' : ''}`}>
+                ▶
+              </span>
+              Show search query
             </button>
-            {showStandaloneQuestion && (
-              <p className="text-xs text-gray-500 italic mt-1">
-                Condensed query: {message.standalone_question}
+            {showQuery && (
+              <p className="text-xs text-gray-600 italic mt-1.5 bg-gray-50 p-2 rounded">
+                <span className="font-medium">🔍 Search query:</span>{' '}
+                {message.standalone_question}
               </p>
             )}
           </div>
         )}
       </div>
+
+      {/* User Avatar */}
+      {isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify center text-white font-bold text-sm">
+          👤
+        </div>
+      )}
     </div>
   )
 }

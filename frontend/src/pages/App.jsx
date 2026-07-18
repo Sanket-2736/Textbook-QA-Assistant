@@ -18,7 +18,7 @@ export default function AppPage() {
 
   const loadTextbooks = async () => {
     try {
-      const list = await api.get('/api/textbooks')
+      const list = await api.get('/textbooks')
       setTextbooks(list || [])
       if (list?.length > 0) {
         setActiveTextbook(list[0])
@@ -61,10 +61,12 @@ export default function AppPage() {
   const handleSessionCreated = async (sessionId, firstQuestion) => {
     // Refresh sessions list when a new session is created
     try {
-      const sessions = await api.get(`/api/sessions?textbook_id=${activeTextbook.id}`)
-      const newSession = sessions.find((s) => s.id === sessionId)
-      if (newSession) {
-        setActiveSession(newSession)
+      if (activeTextbook?.id) {
+        const sessions = await api.get(`/sessions?textbook_id=${activeTextbook.id}`)
+        const newSession = sessions.find((s) => s.id === sessionId)
+        if (newSession) {
+          setActiveSession(newSession)
+        }
       }
     } catch (err) {
       console.error('Failed to refresh sessions:', err)
@@ -73,10 +75,11 @@ export default function AppPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mb-4 mx-auto"></div>
-          <p className="text-gray-600">Loading textbooks...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4 mx-auto"></div>
+          <p className="text-gray-700 font-medium">Loading textbooks...</p>
+          <p className="text-sm text-gray-500 mt-1">Please wait</p>
         </div>
       </div>
     )

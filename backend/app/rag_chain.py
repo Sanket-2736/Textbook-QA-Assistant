@@ -97,7 +97,7 @@ Rewritten standalone question:"""
     # Call Cerebras LLM directly
     standalone_question = invoke_llm(
         prompt=prompt,
-        model="gemma-4-31b",
+        model="gpt-oss-120b",
         temperature=0.1,  # Lower temp for consistent condensation
     )
 
@@ -181,28 +181,56 @@ async def ask_question(
         formatted_docs = format_docs(retrieved_docs)
 
         # Build the complete prompt manually
-        rag_prompt = """You are an expert tutor answering questions about a textbook.
+        rag_prompt = """
+        You are an intelligent AI tutor helping users understand textbook content.
 
-Your instructions:
-1. Answer ONLY based on the provided textbook excerpts below.
-2. If the excerpts contain relevant information, provide a clear, concise answer.
-3. ALWAYS cite the page number and section (if available) for your answer.
-   Format citations as: "(Page X, Section: Y)" or "(Page X)"
-4. If the excerpts do NOT contain information to answer the question, respond with:
-   "I cannot find this information in the provided textbook excerpts."
-5. Do not make up information or use knowledge outside the provided excerpts.
-6. Be conversational but academic in tone.
+        Your primary responsibility is to answer using the provided textbook excerpts.
 
-Conversation Context:
-{conversation_context}
+        Instructions:
 
-Relevant textbook excerpts:
-{formatted_docs}
+        1. Use the textbook excerpts as the PRIMARY source of information.
 
-Question:
-{question}
+        2. If the textbook contains enough information, answer clearly in your own words instead of copying sentences verbatim.
 
-Answer:"""
+        3. If the textbook explanation is brief or incomplete, you MAY add a small amount of accurate background knowledge based on your general understanding to improve clarity.
+
+        4. Any additional knowledge must:
+           - support the textbook,
+           - never contradict the textbook,
+           - never introduce speculative or false information.
+
+        5. If the textbook contains no relevant information, respond:
+           "I cannot find sufficient information in the provided textbook excerpts."
+           Then, optionally provide a brief general explanation and clearly state that it is based on general knowledge rather than the textbook.
+
+        6. Write naturally, as if teaching a student.
+
+        7. Prefer explanations over definitions.
+
+        8. Use examples whenever they improve understanding.
+
+        9. Do NOT mention "According to the excerpts" or "Based on the provided context" repeatedly. Write naturally.
+
+        10. Keep answers concise but sufficiently descriptive (150–300 words unless the question requires otherwise).
+
+        11. At the end, provide textbook citations.
+
+        Citation format:
+        (Page X)
+        or
+        (Page X, Section: Y)
+
+        Conversation Context:
+        {conversation_context}
+
+        Relevant Textbook Excerpts:
+        {formatted_docs}
+
+        Question:
+        {question}
+
+        Answer:
+        """
 
         prompt = rag_prompt.format(
             conversation_context=conversation_context,
@@ -213,7 +241,7 @@ Answer:"""
         # Call Cerebras LLM directly
         answer = invoke_llm(
             prompt=prompt,
-            model="gemma-4-31b",
+            model="gpt-oss-120b",
             temperature=0.3,
         )
 
