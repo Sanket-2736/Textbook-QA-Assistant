@@ -1,5 +1,3 @@
-"""SQLAlchemy database models for multi-tenant RAG system."""
-
 from datetime import datetime
 
 from sqlalchemy import (
@@ -18,7 +16,6 @@ from app.database import Base
 
 
 class User(Base):
-    """User account model."""
 
     __tablename__ = "users"
 
@@ -36,7 +33,6 @@ class User(Base):
 
 
 class Textbook(Base):
-    """Uploaded textbook model scoped to user."""
 
     __tablename__ = "textbooks"
 
@@ -61,7 +57,6 @@ class Textbook(Base):
 
 
 class ChatSession(Base):
-    """Chat session model for ongoing conversations about a textbook."""
 
     __tablename__ = "chat_sessions"
 
@@ -81,8 +76,6 @@ class ChatSession(Base):
 
 
 class ChatMessage(Base):
-    """Individual message in a chat session."""
-
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)

@@ -1,5 +1,3 @@
-"""Embeddings configuration with support for multiple providers."""
-
 import os
 from typing import Optional
 
@@ -10,23 +8,7 @@ load_dotenv()
 
 
 def get_embeddings(provider: Optional[str] = None):
-    """
-    Get embeddings instance based on EMBEDDING_PROVIDER environment variable.
-
-    Supported providers:
-    - "openai": text-embedding-3-small via OpenAI (requires OPENAI_API_KEY)
-    - "local": Sentence Transformers locally (no API key, requires torch)
-    - None/not set: Defaults to OpenAI
-
-    Args:
-        provider: Optional provider override. If not provided, uses EMBEDDING_PROVIDER env var.
-
-    Returns:
-        Embeddings instance (OpenAIEmbeddings or HuggingFaceEmbeddings)
-
-    Raises:
-        ValueError: If OPENAI_API_KEY is not set for OpenAI provider
-    """
+    
     embedding_provider = provider or os.getenv("EMBEDDING_PROVIDER", "local").lower()
 
     if embedding_provider == "openai":
@@ -59,7 +41,6 @@ def get_embeddings(provider: Optional[str] = None):
 
 
 if __name__ == "__main__":
-    # Test embedding functionality
     try:
         embeddings = get_embeddings("openai")
         result = embeddings.embed_query("Hello, world!")

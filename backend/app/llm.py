@@ -1,5 +1,3 @@
-"""LLM provider configuration using Cerebras Cloud SDK."""
-
 import os
 from dotenv import load_dotenv
 from cerebras.cloud.sdk import Cerebras

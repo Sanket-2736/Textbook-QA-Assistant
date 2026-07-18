@@ -1,5 +1,3 @@
-"""Configuration settings for the application."""
-
 import os
 from typing import Optional
 
@@ -9,8 +7,6 @@ load_dotenv()
 
 
 class Settings:
-    """Application settings loaded from environment variables."""
-
     # API Configuration
     api_title: str = os.getenv("API_TITLE", "Textbook Q&A RAG")
     api_version: str = os.getenv("API_VERSION", "0.1.0")
@@ -24,7 +20,6 @@ class Settings:
     openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY")
 
     def __init__(self):
-        """Validate required settings on initialization."""
         if not self.pinecone_api_key:
             raise ValueError("PINECONE_API_KEY environment variable is required")
 

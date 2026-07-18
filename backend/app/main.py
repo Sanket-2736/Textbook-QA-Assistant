@@ -1,17 +1,3 @@
-"""FastAPI application with multi-tenant auth, database persistence, and conversational RAG.
-
-Endpoints:
-- POST /auth/signup, /auth/login — User authentication with JWT
-- POST /upload — Upload and ingest PDF (auth required)
-- GET /textbooks — List user's textbooks (auth required)
-- DELETE /textbooks/{id} — Delete textbook (auth required)
-- POST /ask — Ask question with conversational context (auth required)
-- POST /ask/stream — Stream answer via SSE (auth required)
-- GET /sessions?textbook_id=... — List chat sessions (auth required)
-- GET /sessions/{id}/messages — Get full message history (auth required)
-- GET /health — Health check
-"""
-
 import asyncio
 import json
 import tempfile
@@ -64,7 +50,6 @@ app.include_router(auth_router)
 # ==================== Pydantic Models ====================
 from datetime import datetime
 class TextbookResponse(BaseModel):
-    """Textbook information."""
     id: int
     filename: str
     uploaded_at: datetime
@@ -76,7 +61,6 @@ class TextbookResponse(BaseModel):
 
 
 class UploadResponse(BaseModel):
-    """PDF upload response."""
     filename: str
     num_pages: int
     num_chunks: int
@@ -101,7 +85,6 @@ class SourceInfo(BaseModel):
 
 
 class QuestionResponse(BaseModel):
-    """Q&A response."""
     answer: str
     sources: list[SourceInfo]
     standalone_question: str
@@ -110,7 +93,6 @@ class QuestionResponse(BaseModel):
 
 
 class ChatMessageResponse(BaseModel):
-    """Chat message in history."""
     id: int
     role: str
     content: str
@@ -123,7 +105,6 @@ class ChatMessageResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """Chat session information."""
     id: int
     textbook_id: int
     created_at: datetime
@@ -134,7 +115,6 @@ class SessionResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
     status: str
     message: str
     version: str
@@ -144,13 +124,11 @@ class HealthResponse(BaseModel):
 
 @app.on_event("startup")
 async def startup():
-    """Initialize database on startup."""
     await init_db()
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Close database on shutdown."""
     await close_db()
 
 
@@ -158,7 +136,6 @@ async def shutdown():
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    """Health check endpoint."""
     return HealthResponse(
         status="healthy",
         message="Textbook Q&A RAG API is running",
@@ -168,7 +145,6 @@ async def health():
 
 @app.get("/")
 async def root():
-    """API information."""
     return {
         "status": "ok",
         "message": "Textbook Q&A RAG API",
@@ -185,7 +161,6 @@ async def upload_pdf(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload and ingest a PDF for the current user."""
     # Import here to defer spacy/thinc loading until needed
     from app.ingest import ingest_pdf_to_pinecone
     
@@ -252,7 +227,6 @@ async def list_textbooks(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all textbooks for the current user."""
     stmt = select(Textbook).where(Textbook.user_id == current_user.id)
     result = await db.execute(stmt)
     textbooks = result.scalars().all()
@@ -265,7 +239,6 @@ async def delete_textbook(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a textbook (only if owned by current user)."""
     stmt = select(Textbook).where(
         and_(Textbook.id == textbook_id, Textbook.user_id == current_user.id)
     )
@@ -290,7 +263,6 @@ async def ask(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ask a question about a textbook (supports follow-ups with context)."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
@@ -381,7 +353,6 @@ async def ask_stream(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream answer tokens via Server-Sent Events."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
@@ -419,7 +390,6 @@ async def ask_stream(
         await db.refresh(session)
 
     async def generate():
-        """SSE generator."""
         try:
             # TODO: Implement streaming with chain.astream()
             yield f"data: {{'type': 'error', 'message': 'Streaming not yet implemented'}}\n\n"
@@ -463,7 +433,6 @@ async def get_session_messages(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get full message history for a session."""
     # Verify session ownership
     stmt = (
         select(ChatSession)

@@ -1,5 +1,3 @@
-"""Pinecone vector store integration."""
-
 import os
 from typing import Optional
 
@@ -17,22 +15,6 @@ def init_pinecone_index(
     cloud: str = "aws",
     region: str = "us-east-1",
 ) -> None:
-    """
-    Initialize or verify a Pinecone serverless index.
-
-    Creates the index if it doesn't exist. Uses the current Pinecone Python SDK
-    with serverless spec.
-
-    Args:
-        index_name: Name of the index to create/verify
-        dimension: Embedding dimension (default 1536 for text-embedding-3-small)
-        metric: Distance metric - "cosine", "euclidean", or "dotproduct"
-        cloud: Cloud provider - "aws", "gcp", or "azure"
-        region: Cloud region - e.g., "us-east-1", "us-west-2"
-
-    Raises:
-        ValueError: If PINECONE_API_KEY is not set
-    """
     api_key = os.getenv("PINECONE_API_KEY")
     if not api_key:
         raise ValueError("PINECONE_API_KEY environment variable is required")
@@ -66,20 +48,6 @@ def get_vectorstore(
     embeddings,
     namespace: Optional[str] = None,
 ) -> PineconeVectorStore:
-    """
-    Get a LangChain PineconeVectorStore instance.
-
-    Args:
-        index_name: Name of the Pinecone index
-        embeddings: Embeddings instance (from embeddings.py)
-        namespace: Optional namespace for the index
-
-    Returns:
-        PineconeVectorStore: LangChain-compatible vector store
-
-    Raises:
-        ValueError: If PINECONE_API_KEY is not set
-    """
     api_key = os.getenv("PINECONE_API_KEY")
     if not api_key:
         raise ValueError("PINECONE_API_KEY environment variable is required")
@@ -92,15 +60,6 @@ def get_vectorstore(
 
 
 def delete_pinecone_index(index_name: str) -> None:
-    """
-    Delete a Pinecone index.
-
-    Args:
-        index_name: Name of the index to delete
-
-    Raises:
-        ValueError: If PINECONE_API_KEY is not set
-    """
     api_key = os.getenv("PINECONE_API_KEY")
     if not api_key:
         raise ValueError("PINECONE_API_KEY environment variable is required")
@@ -111,7 +70,6 @@ def delete_pinecone_index(index_name: str) -> None:
 
 
 if __name__ == "__main__":
-    """Test script: create, upsert, query, and delete a test index."""
     import time
 
     from app.embeddings import get_embeddings

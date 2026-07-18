@@ -39,12 +39,6 @@ async def signup(
     request: SignupRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Register a new user and return JWT token.
-
-    - **email**: User email address
-    - **password**: User password (hashed with Argon2)
-    """
     # Check if user already exists
     stmt = select(User).where(User.email == request.email)
     result = await db.execute(stmt)
@@ -79,12 +73,6 @@ async def login(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Login user and return JWT token.
-
-    - **email**: User email address
-    - **password**: User password
-    """
     # Find user
     stmt = select(User).where(User.email == request.email)
     result = await db.execute(stmt)
@@ -103,7 +91,6 @@ async def login(
             detail="Invalid email or password",
         )
 
-    # Generate token
     access_token = create_access_token(data={"sub": user.email})
 
     return TokenResponse(

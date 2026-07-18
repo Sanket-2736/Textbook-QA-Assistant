@@ -1,8 +1,3 @@
-"""PDF ingestion pipeline for textbook Q&A RAG system.
-
-Phase 1: Load PDFs, extract metadata, chunk, embed, and upsert to Pinecone.
-"""
-
 import os
 import re
 from pathlib import Path
@@ -20,15 +15,6 @@ load_dotenv()
 
 
 def extract_metadata(loader: PyPDFLoader) -> tuple[int, dict]:
-    """
-    Extract and attach metadata to documents.
-
-    Args:
-        loader: PyPDFLoader instance
-
-    Returns:
-        Tuple of (num_pages, metadata_dict)
-    """
     # Get PDF info
     pdf_path = loader.file_path
     filename = Path(pdf_path).name
@@ -48,21 +34,6 @@ def extract_metadata(loader: PyPDFLoader) -> tuple[int, dict]:
 
 
 def detect_heading_level(text: str, page_index: int) -> Optional[str]:
-    """
-    Best-effort detection of chapter/section heading from text patterns.
-
-    Looks for:
-    - Lines starting with "Chapter", "Section", "Part"
-    - All-caps lines (often headings)
-    - Lines shorter than 100 chars and with Title Case
-
-    Args:
-        text: Text content to analyze
-        page_index: Page number for context
-
-    Returns:
-        Detected heading or None
-    """
     lines = text.strip().split("\n")
 
     for line in lines[:5]:  # Check first 5 lines
@@ -94,21 +65,6 @@ def load_and_chunk_pdf(
     chunk_size: int = 800,
     chunk_overlap: int = 100,
 ) -> tuple[List, int]:
-    """
-    Load PDF and chunk content with metadata.
-
-    Args:
-        pdf_path: Path to PDF file
-        chunk_size: Size of text chunks
-        chunk_overlap: Overlap between chunks
-
-    Returns:
-        Tuple of (documents_with_metadata, num_pages)
-
-    Raises:
-        FileNotFoundError: If PDF doesn't exist
-        ValueError: If PDF cannot be loaded
-    """
     pdf_file = Path(pdf_path)
     if not pdf_file.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
@@ -164,25 +120,6 @@ def ingest_pdf_to_pinecone(
     chunk_overlap: int = 100,
     verbose: bool = True,
 ) -> dict:
-    """
-    Full ingestion pipeline: load PDF, chunk, embed, and upsert to Pinecone.
-
-    Args:
-        pdf_path: Path to PDF file
-        index_name: Pinecone index name
-        namespace: Pinecone namespace (optional)
-        embedding_provider: "openai" or "local" (default: env var or "openai")
-        chunk_size: Chunk size for splitting
-        chunk_overlap: Overlap between chunks
-        verbose: Print progress messages
-
-    Returns:
-        Summary dict with statistics
-
-    Raises:
-        FileNotFoundError: If PDF doesn't exist
-        ValueError: If ingestion fails
-    """
     if verbose:
         click.echo(f"📖 Loading PDF: {pdf_path}")
 
@@ -319,7 +256,6 @@ def main(
     chunk_size: int,
     chunk_overlap: int,
 ):
-    """Ingest PDF into Pinecone vector store for Q&A RAG."""
     try:
         ingest_pdf_to_pinecone(
             pdf_path=file,

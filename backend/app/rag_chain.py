@@ -1,11 +1,3 @@
-"""RAG chain for Q&A with conversational follow-up support using Cerebras SDK.
-
-Features:
-- Query condensation: Rewrite follow-ups into standalone questions using chat history
-- Multi-turn conversations: Maintains context across multiple turns in a session
-- Citation tracking: Includes page numbers and sections in answers
-"""
-
 import os
 from typing import Optional
 
@@ -22,14 +14,6 @@ load_dotenv()
 
 
 def format_docs(docs: list) -> str:
-    """Format retrieved documents for the prompt.
-
-    Args:
-        docs: List of retrieved Document objects
-
-    Returns:
-        Formatted string with page numbers and content
-    """
     if not docs:
         return "No relevant excerpts found in the textbook."
 
@@ -54,16 +38,6 @@ async def get_session_history(
     session_id: int,
     num_turns: int = 6,
 ) -> list[ChatMessage]:
-    """Fetch recent chat history for a session.
-
-    Args:
-        db: Database session
-        session_id: Chat session ID
-        num_turns: Number of recent messages to fetch (default: 6 = ~3 turns)
-
-    Returns:
-        List of ChatMessage objects, ordered chronologically
-    """
     stmt = (
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
@@ -77,14 +51,6 @@ async def get_session_history(
 
 
 def format_conversation_context(messages: list[ChatMessage]) -> str:
-    """Format recent conversation for context in the final prompt.
-
-    Args:
-        messages: List of ChatMessage objects (ordered chronologically)
-
-    Returns:
-        Formatted conversation string
-    """
     if not messages:
         return "[No prior conversation]"
 
@@ -100,15 +66,6 @@ async def condense_question(
     question: str,
     session_history: list[ChatMessage],
 ) -> str:
-    """Condense a follow-up question into a standalone question using chat history.
-
-    Args:
-        question: The new follow-up question
-        session_history: Prior messages in the session
-
-    Returns:
-        Standalone question (or original question if no history)
-    """
     if not session_history:
         # First turn: no condensation needed
         return question
@@ -163,22 +120,6 @@ async def ask_question(
     namespace: str = "",
     verbose: bool = False,
 ) -> dict:
-    """Ask a question in a chat session with conversational follow-up support.
-
-    Args:
-        question: The user's question
-        session_id: Chat session ID (for history context)
-        textbook_id: Textbook ID (for namespace scoping)
-        db: Database session
-        index_name: Pinecone index name
-        embedding_provider: "openai" or "local"
-        top_k: Number of source documents
-        namespace: Pinecone namespace (usually textbook_id)
-        verbose: Print debug info
-
-    Returns:
-        Dict with: answer, sources, standalone_question, num_sources, question, session_id
-    """
     if verbose:
         print(f"Session ID: {session_id}, Textbook ID: {textbook_id}")
         print(f"Retrieving chat history...")
@@ -317,7 +258,6 @@ Answer:"""
 
 
 if __name__ == "__main__":
-    """Test script (requires database setup)."""
     import asyncio
 
     print("=" * 60)

@@ -1,5 +1,3 @@
-"""Authentication and JWT token management."""
-
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -24,12 +22,10 @@ pwd_context = PasswordHasher()
 
 
 def hash_password(password: str) -> str:
-    """Hash password using Argon2."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash."""
     try:
         pwd_context.verify(hashed_password, plain_password)
         return True
@@ -38,7 +34,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT access token."""
     to_encode = data.copy()
 
     if expires_delta:
@@ -53,7 +48,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def decode_token(token: str) -> dict:
-    """Decode and validate JWT token."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -79,7 +73,6 @@ async def get_current_user(
     token: str,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Get current user from JWT token. Used as dependency in protected routes."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
