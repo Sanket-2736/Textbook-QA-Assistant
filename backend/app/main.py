@@ -30,7 +30,6 @@ from app.auth import get_current_user
 from app.auth_routes import router as auth_router
 from app.database import get_db, init_db, close_db
 from app.embeddings import get_embeddings
-from app.ingest import ingest_pdf_to_pinecone
 from app.models import ChatMessage, ChatSession, Textbook, User
 from app.rag_chain import ask_question
 from fastapi import FastAPI
@@ -187,6 +186,9 @@ async def upload_pdf(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload and ingest a PDF for the current user."""
+    # Import here to defer spacy/thinc loading until needed
+    from app.ingest import ingest_pdf_to_pinecone
+    
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
@@ -477,3 +479,5 @@ async def get_session_messages(
     # Return messages in chronological order
     messages = sorted(session.messages, key=lambda m: m.created_at)
     return messages
+
+# python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
