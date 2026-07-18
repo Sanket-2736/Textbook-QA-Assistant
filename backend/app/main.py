@@ -62,12 +62,12 @@ app.include_router(auth_router)
 
 
 # ==================== Pydantic Models ====================
-
+from datetime import datetime
 class TextbookResponse(BaseModel):
     """Textbook information."""
     id: int
     filename: str
-    uploaded_at: str
+    uploaded_at: datetime
     page_count: int
     chunk_count: int
 
@@ -116,7 +116,7 @@ class ChatMessageResponse(BaseModel):
     content: str
     sources: Optional[list] = None
     standalone_question: Optional[str] = None
-    created_at: str
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -126,7 +126,7 @@ class SessionResponse(BaseModel):
     """Chat session information."""
     id: int
     textbook_id: int
-    created_at: str
+    created_at: datetime
     title: Optional[str] = None
 
     class Config:
@@ -481,3 +481,4 @@ async def get_session_messages(
     return messages
 
 # python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# python -m uvicorn app.main:app --reload

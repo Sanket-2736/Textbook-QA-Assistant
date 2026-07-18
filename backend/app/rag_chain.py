@@ -1,4 +1,4 @@
-"""RAG chain for Q&A with conversational follow-up support using LCEL.
+"""RAG chain for Q&A with conversational follow-up support using Cerebras SDK.
 
 Features:
 - Query condensation: Rewrite follow-ups into standalone questions using chat history
@@ -10,15 +10,11 @@ import os
 from typing import Optional
 
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.embeddings import get_embeddings
-from app.llm import get_llm
+from app.llm import invoke_llm
 from app.models import ChatMessage, ChatSession
 from app.vectorstore import get_vectorstore
 
@@ -51,100 +47,6 @@ def format_docs(docs: list) -> str:
         formatted.append(f"{header}\n{content}")
 
     return "\n\n---\n\n".join(formatted)
-
-
-def build_condensation_chain():
-    """Build LCEL chain for query condensation (rewriting follow-ups into standalone questions)."""
-    llm = get_llm(temperature=0.1)  # Lower temp for consistent condensation
-
-    prompt = ChatPromptTemplate.from_template(
-        """Given the following conversation history and a follow-up question, 
-rewrite the follow-up question as a standalone, self-contained question that 
-captures all the context needed to find relevant textbook excerpts.
-
-Keep the rewritten question concise and focused on what was asked.
-
-Conversation history:
-{history}
-
-Follow-up question: {question}
-
-Rewritten standalone question:"""
-    )
-
-    chain = prompt | llm | StrOutputParser()
-    return chain
-
-
-def build_rag_chain(
-    index_name: str,
-    embedding_provider: Optional[str] = None,
-    top_k: int = 4,
-    llm_model: str = "llama-3.1-70b",
-    llm_temperature: float = 0.3,
-    namespace: str = "",
-):
-    """Build LCEL RAG chain with Pinecone retriever and Cerebras LLM.
-
-    Args:
-        index_name: Pinecone index name
-        embedding_provider: "openai" or "local" (default: env var)
-        top_k: Number of documents to retrieve (default: 4)
-        llm_model: Cerebras model name
-        llm_temperature: LLM temperature (0-1, lower = more deterministic)
-        namespace: Pinecone namespace
-
-    Returns:
-        Runnable LCEL chain
-
-    Raises:
-        ValueError: If required API keys are missing
-    """
-    embeddings = get_embeddings(provider=embedding_provider)
-    vectorstore = get_vectorstore(
-        index_name=index_name,
-        embeddings=embeddings,
-        namespace=namespace,
-    )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
-    llm = get_llm(model=llm_model, temperature=llm_temperature)
-
-    prompt = ChatPromptTemplate.from_template(
-        """You are an expert tutor answering questions about a textbook.
-
-Your instructions:
-1. Answer ONLY based on the provided textbook excerpts below.
-2. If the excerpts contain relevant information, provide a clear, concise answer.
-3. ALWAYS cite the page number and section (if available) for your answer.
-   Format citations as: "(Page X, Section: Y)" or "(Page X)"
-4. If the excerpts do NOT contain information to answer the question, respond with:
-   "I cannot find this information in the provided textbook excerpts."
-5. Do not make up information or use knowledge outside the provided excerpts.
-6. Be conversational but academic in tone.
-
-PRIOR CONVERSATION (for context/tone):
-{conversation_context}
-
-TEXTBOOK EXCERPTS:
-{context}
-
-QUESTION: {question}
-
-ANSWER:"""
-    )
-
-    chain = (
-        {
-            "context": retriever | format_docs,
-            "question": RunnablePassthrough(),
-            "conversation_context": RunnablePassthrough(),
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    return chain, retriever
 
 
 async def get_session_history(
@@ -216,12 +118,31 @@ async def condense_question(
         [f"{msg.role}: {msg.content}" for msg in session_history[-4:]]
     )
 
-    # Build and run condensation chain
-    condensation_chain = build_condensation_chain()
-    standalone_question = condensation_chain.invoke({
-        "history": history_text,
-        "question": question,
-    })
+    # Build condensation prompt manually
+    condensation_prompt = """Given the following conversation history and a follow-up question, 
+rewrite the follow-up question as a standalone, self-contained question that 
+captures all the context needed to find relevant textbook excerpts.
+
+Keep the rewritten question concise and focused on what was asked.
+
+Conversation history:
+{history}
+
+Follow-up question: {question}
+
+Rewritten standalone question:"""
+
+    prompt = condensation_prompt.format(
+        history=history_text,
+        question=question,
+    )
+
+    # Call Cerebras LLM directly
+    standalone_question = invoke_llm(
+        prompt=prompt,
+        model="gemma-4-31b",
+        temperature=0.1,  # Lower temp for consistent condensation
+    )
 
     print(f"\n[Query Condensation]")
     print(f"Original question: {question}")
@@ -276,19 +197,34 @@ async def ask_question(
 
     standalone_question = await condense_question(question, session_history)
 
-    # Step 2: Build RAG chain and retrieve documents using standalone question
+    # Step 2: Set up retriever for the specified index
     if verbose:
-        print(f"Building RAG chain for index: {index_name}")
+        print(f"Setting up retriever for index: {index_name}")
 
-    chain, retriever = build_rag_chain(
+    embeddings = get_embeddings(provider=embedding_provider)
+    vectorstore = get_vectorstore(
         index_name=index_name,
-        embedding_provider=embedding_provider,
-        top_k=top_k,
+        embeddings=embeddings,
         namespace=namespace,
     )
+    retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
 
     try:
         retrieved_docs = retriever.invoke(standalone_question)
+        unique_docs = []
+        seen = set()
+
+        for doc in retrieved_docs:
+            key = (
+                doc.metadata.get("page_number"),
+                doc.page_content[:100]
+            )
+
+            if key not in seen:
+                seen.add(key)
+                unique_docs.append(doc)
+
+        retrieved_docs = unique_docs
     except Exception as e:
         raise ValueError(f"Failed to retrieve documents: {e}")
 
@@ -300,11 +236,46 @@ async def ask_question(
 
     # Step 4: Generate answer using retrieved docs and conversation context
     try:
-        answer = chain.invoke({
-            "question": question,  # Use original question in final prompt
-            "context": format_docs(retrieved_docs),
-            "conversation_context": conversation_context,
-        })
+        # Format the retrieved documents
+        formatted_docs = format_docs(retrieved_docs)
+
+        # Build the complete prompt manually
+        rag_prompt = """You are an expert tutor answering questions about a textbook.
+
+Your instructions:
+1. Answer ONLY based on the provided textbook excerpts below.
+2. If the excerpts contain relevant information, provide a clear, concise answer.
+3. ALWAYS cite the page number and section (if available) for your answer.
+   Format citations as: "(Page X, Section: Y)" or "(Page X)"
+4. If the excerpts do NOT contain information to answer the question, respond with:
+   "I cannot find this information in the provided textbook excerpts."
+5. Do not make up information or use knowledge outside the provided excerpts.
+6. Be conversational but academic in tone.
+
+Conversation Context:
+{conversation_context}
+
+Relevant textbook excerpts:
+{formatted_docs}
+
+Question:
+{question}
+
+Answer:"""
+
+        prompt = rag_prompt.format(
+            conversation_context=conversation_context,
+            formatted_docs=formatted_docs,
+            question=question,
+        )
+
+        # Call Cerebras LLM directly
+        answer = invoke_llm(
+            prompt=prompt,
+            model="gemma-4-31b",
+            temperature=0.3,
+        )
+
     except Exception as e:
         raise ValueError(f"Failed to generate answer: {e}")
 

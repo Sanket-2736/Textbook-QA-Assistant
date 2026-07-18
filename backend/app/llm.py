@@ -1,44 +1,40 @@
-"""LLM provider configuration using Cerebras."""
+"""LLM provider configuration using Cerebras Cloud SDK."""
 
 import os
-from typing import Optional
-
 from dotenv import load_dotenv
-from langchain_cerebras.chat_models import ChatCerebras
+from cerebras.cloud.sdk import Cerebras
 
 load_dotenv()
 
 
-def get_llm(model: str = "llama-3.1-70b", temperature: float = 0.7) -> ChatCerebras:
-    """
-    Initialize and return a ChatCerebras LLM instance.
-
-    Args:
-        model: Model name to use. Default is "llama-3.1-70b"
-        temperature: Temperature for model response. Default is 0.7
-
-    Returns:
-        ChatCerebras: Configured chat model instance
-
-    Raises:
-        ValueError: If CEREBRAS_API_KEY is not set
-    """
-    api_key: Optional[str] = os.getenv("CEREBRAS_API_KEY")
+def get_llm():
+    api_key = os.getenv("CEREBRAS_API_KEY")
 
     if not api_key:
         raise ValueError("CEREBRAS_API_KEY environment variable is required")
 
-    return ChatCerebras(
-        api_key=api_key,
+    return Cerebras(api_key=api_key)
+
+
+def invoke_llm(
+    prompt: str,
+    model: str = "gemma-4-31b",
+    temperature: float = 0.7,
+):
+    client = get_llm()
+
+    response = client.chat.completions.create(
         model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
         temperature=temperature,
     )
 
+    return response.choices[0].message.content
 
 if __name__ == "__main__":
-    # Test block: instantiate LLM and send a test message
-    llm = get_llm()
-    message = "Say hello in 5 words"
-    print(f"Query: {message}")
-    response = llm.invoke(message)
-    print(f"Response: {response.content}")
+    print(invoke_llm("Say hello in 5 words"))
